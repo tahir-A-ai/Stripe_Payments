@@ -13,5 +13,5 @@ urlpatterns = [
     path('connect-stripe/', ConnectStripeView.as_view(), name='connect-stripe'),
     path('oauth/callback/', StripeCallbackView.as_view(), name='stripe-callback'),
     path('create-vendor-payout/', CreateVendorPayoutView.as_view(), name='create-vendor-payout'),
-    path('create-platform-payout/', CreatePlatformPayoutView.as_view(), name='create-platform-payout')
+    path('create-platform-payout/', CreatePlatformPayoutView.as_view(), name='create-platform-payout'),
 ]
