@@ -2,3 +2,4 @@ Django==5.2.11
 djangorestframework==3.16.1
 stripe>=14.3.0
 python-dotenv==1.2.1
+djangorestframework_simplejwt>=5.5.1
