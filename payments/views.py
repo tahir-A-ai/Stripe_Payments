@@ -4,12 +4,16 @@ from django.conf import settings
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
-from .serializers import CheckoutSessionSerializer
+from .serializers import CheckoutSessionSerializer, CustomTokenSerializer
 from django.shortcuts import get_object_or_404
 from .models import Product, VendorProfile
 from rest_framework.permissions import IsAuthenticated, IsAdminUser
+from rest_framework_simplejwt.views import TokenObtainPairView
 
 stripe.api_key = settings.STRIPE_SECRET_KEY
+
+class CustomTokenView(TokenObtainPairView):
+    serializer_class = CustomTokenSerializer
 
 class CreateCheckoutSessionView(APIView):
     def post(self, request, *args, **kwargs):
@@ -72,33 +76,78 @@ class CreateCheckoutSessionView(APIView):
             )
 
 
+""" Express Stripe Account - View"""
 class ConnectStripeView(APIView):
-    permission_classes=  [IsAuthenticated]
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, *args, **kwargs):
-        
         try:
             vendor = request.user.vendorprofile
-            if vendor.stripe_account_id:
+            if not vendor:
                 return Response({
-                    'message': 'You are already connected!',
-                    'stripe_account_id': vendor.stripe_account_id,
+                    'error': 'User is not a vendor',
+                    'stripe_account_id': None,
                     'url': None
                 })
-        except VendorProfile.DoesNotExist:
-            pass
 
-        redirect_uri = 'http://localhost:8000/api/payments/oauth/callback/'
-        client_id = settings.STRIPE_CLIENT_ID
+            if not vendor.stripe_account_id:
+                account = stripe.Account.create(
+                    type="express",
+                    country="US",
+                    capabilities={
+                        "card_payments": {"requested": True},
+                        "transfers": {"requested": True},
+                    },
+                )
+                vendor.stripe_account_id = account.id
+                vendor.save()
 
-        stripe_url = (
-            f"https://connect.stripe.com/oauth/authorize?"
-            f"response_type=code&"
-            f"client_id={client_id}&"
-            f"scope=read_write&"
-            f"redirect_uri={redirect_uri}"
-        )
+            refresh_url = 'http://localhost:3000/vendor/onboarding/refresh/' 
+            return_url = 'http://localhost:3000/vendor/dashboard/'
 
-        return Response({'url': stripe_url})
+            account_link = stripe.AccountLink.create(
+                account=vendor.stripe_account_id,
+                refresh_url=refresh_url,
+                return_url=return_url,
+                type="account_onboarding",
+            )
+            return Response({
+                'message': 'Account link generated successfully',
+                'stripe_account_id': vendor.stripe_account_id,
+                'url': account_link.url
+            })
+        except Exception as e:
+            return Response({'error': str(e)}, status=500)
+
+
+""" Standard Stripe Account - View"""
+# class ConnectStripeView(APIView):
+#     permission_classes=  [IsAuthenticated]
+#     def get(self, request, *args, **kwargs):
+        
+#         try:
+#             vendor = request.user.vendorprofile
+#             if vendor.stripe_account_id:
+#                 return Response({
+#                     'message': 'You are already connected!',
+#                     'stripe_account_id': vendor.stripe_account_id,
+#                     'url': None
+#                 })
+#         except VendorProfile.DoesNotExist:
+#             pass
+
+#         redirect_uri = 'http://localhost:8000/api/payments/oauth/callback/'
+#         client_id = settings.STRIPE_CLIENT_ID
+
+#         stripe_url = (
+#             f"https://connect.stripe.com/oauth/authorize?"
+#             f"response_type=code&"
+#             f"client_id={client_id}&"
+#             f"scope=read_write&"
+#             f"redirect_uri={redirect_uri}"
+#         )
+
+#         return Response({'url': stripe_url})
     
 
 class StripeCallbackView(APIView):
