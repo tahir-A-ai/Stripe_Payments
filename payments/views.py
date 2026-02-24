@@ -83,6 +83,7 @@ class ConnectStripeView(APIView):
     def get(self, request, *args, **kwargs):
         try:
             vendor = request.user.vendorprofile
+
             if not vendor:
                 return Response({
                     'error': 'User is not a vendor',
@@ -150,41 +151,41 @@ class ConnectStripeView(APIView):
 #         return Response({'url': stripe_url})
     
 
-class StripeCallbackView(APIView):
-    permission_classes=  [IsAuthenticated]
+# class StripeCallbackView(APIView):
+#     permission_classes=  [IsAuthenticated]
 
-    def get(self, request, *args, **kwargs):
-        code = request.query_params.get('code')
-        if not code:
-            return Response({'error': 'No code provided'}, status=status.HTTP_400_BAD_REQUEST)
-        try:
-            response = requests.post(
-                'https://connect.stripe.com/oauth/token',
-                data={
-                    'client_secret': settings.STRIPE_SECRET_KEY,
-                    'code': code,
-                    'grant_type': 'authorization_code'
-                }
-            )
-            data = response.json()
-            if 'error' in data:
-                return Response({'error': data.get('error_description')}, status=status.HTTP_400_BAD_REQUEST)
+#     def get(self, request, *args, **kwargs):
+#         code = request.query_params.get('code')
+#         if not code:
+#             return Response({'error': 'No code provided'}, status=status.HTTP_400_BAD_REQUEST)
+#         try:
+#             response = requests.post(
+#                 'https://connect.stripe.com/oauth/token',
+#                 data={
+#                     'client_secret': settings.STRIPE_SECRET_KEY,
+#                     'code': code,
+#                     'grant_type': 'authorization_code'
+#                 }
+#             )
+#             data = response.json()
+#             if 'error' in data:
+#                 return Response({'error': data.get('error_description')}, status=status.HTTP_400_BAD_REQUEST)
 
-            stripe_account_id = data['stripe_user_id']
-            user = request.user 
+#             stripe_account_id = data['stripe_user_id']
+#             user = request.user 
 
-            vendor_profile, created = VendorProfile.objects.get_or_create(user=user)
-            vendor_profile.stripe_account_id = stripe_account_id
-            vendor_profile.save()
+#             vendor_profile, created = VendorProfile.objects.get_or_create(user=user)
+#             vendor_profile.stripe_account_id = stripe_account_id
+#             vendor_profile.save()
 
-            return Response({
-                'success': True, 
-                'stripe_account_id': stripe_account_id,
-                'message': 'Vendor successfully connected!'
-            })
+#             return Response({
+#                 'success': True, 
+#                 'stripe_account_id': stripe_account_id,
+#                 'message': 'Vendor successfully connected!'
+#             })
 
-        except Exception as e:
-            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+#         except Exception as e:
+#             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 class CreateVendorPayoutView(APIView):
