@@ -10,7 +10,16 @@ from .models import Product, VendorProfile
 from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from rest_framework_simplejwt.views import TokenObtainPairView
 
+from allauth.socialaccount.providers.google.views import GoogleOAuth2Adapter
+from allauth.socialaccount.providers.oauth2.client import OAuth2Client
+from dj_rest_auth.registration.views import SocialLoginView
+
 stripe.api_key = settings.STRIPE_SECRET_KEY
+
+class GoogleLoginView(SocialLoginView):
+    adapter_class = GoogleOAuth2Adapter
+    BASE_URL = "http://localhost:8000/"
+    client_class = OAuth2Client
 
 class CustomTokenView(TokenObtainPairView):
     serializer_class = CustomTokenSerializer
