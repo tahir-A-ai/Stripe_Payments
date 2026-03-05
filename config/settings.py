@@ -34,6 +34,8 @@ INSTALLED_APPS = [
     'allauth.socialaccount',
     'allauth.socialaccount.providers.google',
     'dj_rest_auth.registration',
+    'allauth.socialaccount.providers.github',
+    'allauth.socialaccount.providers.linkedin_oauth2',
 ]
 
 
@@ -50,6 +52,22 @@ SOCIALACCOUNT_PROVIDERS = {
             'secret': os.environ.get('GOOGLE_CLIENT_SECRET'),
             'key': ''
         }
+    },
+    'github':{
+        'APP':{
+            'client_id': os.environ.get('GITHUB_CLIENT_ID'),
+            'secret': os.environ.get('GITHUB_CLIENT_SECRET'),
+            'key': ''
+        },
+        'SCOPE': ['user:email', 'read:user']
+    },
+    'linkedin':{
+        'APP':{
+            'client_id': os.environ.get('LINKEDIN_CLIENT_ID'),
+            'secret': os.environ.get('LINKEDIN_CLIENT_SECRET'),
+            'key': ''
+        },
+        'SCOPE': ['openid', 'profile', 'email']
     }
 }
 
