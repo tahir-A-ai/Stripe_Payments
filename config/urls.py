@@ -11,7 +11,7 @@ from payments.views import (
 
 urlpatterns = [
     path('admin/', admin.site.urls),
-     path('api/token/', CustomTokenView.as_view()),
+    path('api/token/', CustomTokenView.as_view()),
     path('api/token/refresh/', TokenRefreshView.as_view()),
     path('api/auth/google/', GoogleLoginView.as_view(), name='google_login'),
     path('api/auth/google/url/', GoogleAuthURLView.as_view(), name='google_auth_url'),
