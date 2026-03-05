@@ -11,15 +11,84 @@ from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from rest_framework_simplejwt.views import TokenObtainPairView
 
 from allauth.socialaccount.providers.google.views import GoogleOAuth2Adapter
+from allauth.socialaccount.providers.github.views import GitHubOAuth2Adapter
+from allauth.socialaccount.providers.linkedin_oauth2.views import LinkedInOAuth2Adapter
 from allauth.socialaccount.providers.oauth2.client import OAuth2Client
 from dj_rest_auth.registration.views import SocialLoginView
 
 stripe.api_key = settings.STRIPE_SECRET_KEY
 
+import os
+import urllib.parse
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework.permissions import AllowAny
+
+class GoogleAuthURLView(APIView):
+    permission_classes = [AllowAny] 
+
+    def get(self, request, *args, **kwargs):
+
+        base_url = "https://accounts.google.com/o/oauth2/v2/auth"
+        redirect_uri = "http://localhost:8000/" 
+
+        params = {
+            'client_id': os.environ.get('GOOGLE_CLIENT_ID'),
+            'response_type': 'code',
+            'redirect_uri': redirect_uri,
+            'scope': 'email profile',
+            'access_type': 'offline',
+            'prompt': 'consent'
+        }
+
+        url = f"{base_url}?{urllib.parse.urlencode(params)}"
+        return Response({'url': url})
+
+
+class GitHubAuthURLView(APIView):
+    permission_classes = [AllowAny]
+    def get(self, request, *args, **kwargs):
+        base_url = "https://github.com/login/oauth/authorize"
+        redirect_uri = "http://localhost:8000/"
+        params = {
+            'client_id': os.environ.get('GITHUB_CLIENT_ID'),
+            'redirect_uri': redirect_uri,
+            'scope': 'user:email read:user',
+        }
+        url = f"{base_url}?{urllib.parse.urlencode(params)}"
+        return Response({'url': url})
+    
+
+class LinkedInAuthURLView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request, *args, **kwargs):
+        base_url = "https://www.linkedin.com/oauth/v2/authorization"
+        redirect_uri = "http://localhost:8000/" 
+        params = {
+            'response_type': 'code',
+            'client_id': os.environ.get('LINKEDIN_CLIENT_ID'),
+            'redirect_uri': redirect_uri,
+            'scope': 'openid profile email',
+        }
+        url = f"{base_url}?{urllib.parse.urlencode(params)}"
+        return Response({'url': url})
+    
+
 class GoogleLoginView(SocialLoginView):
     adapter_class = GoogleOAuth2Adapter
-    BASE_URL = "http://localhost:8000/"
     client_class = OAuth2Client
+    callback_url = "http://localhost:8000/"
+
+class GitHubLoginView(SocialLoginView):
+    adapter_class = GitHubOAuth2Adapter
+    client_class = OAuth2Client
+    callback_url = "http://localhost:8000/"
+
+class LinkedInLoginView(SocialLoginView):
+    adapter_class = LinkedInOAuth2Adapter
+    client_class = OAuth2Client
+    callback_url = "http://localhost:8000/"
 
 class CustomTokenView(TokenObtainPairView):
     serializer_class = CustomTokenSerializer
