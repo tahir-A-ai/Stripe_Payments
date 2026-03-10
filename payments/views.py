@@ -1,14 +1,37 @@
-import requests
+from rest_framework.response import Response
 import stripe
+import os
+from rest_framework.permissions import AllowAny
+from rest_framework_simplejwt.authentication import JWTAuthentication
+import urllib.parse
+from rest_framework.views import APIView
 from django.conf import settings
 from rest_framework.views import APIView
 from rest_framework.response import Response
+from django.contrib.auth import authenticate
 from rest_framework import status
-from .serializers import CheckoutSessionSerializer, CustomTokenSerializer
+from .serializers import (
+    CheckoutSessionSerializer, CustomTokenSerializer, 
+    LoginResponseSerializer, LoginSerializer,
+    OTPVerificationSerializer, TOTPSetupSerializer,
+    TOTPVerifySetupSerializer,TOTPVerificationSerializer, 
+    TOTPVerificationLoginSerializer,
+    )
 from django.shortcuts import get_object_or_404
-from .models import Product, VendorProfile
+from .models import Product, VendorProfile, UserProfile, OTPVerification
 from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from rest_framework_simplejwt.views import TokenObtainPairView
+from .utils import (
+    generate_otp, 
+    generate_session_token, 
+    send_otp_via_sms, 
+    send_otp_via_email
+)
+from .totp_utils import (
+    generate_totp_secret,
+    verify_totp_code,
+    get_current_totp_code
+)
 
 from allauth.socialaccount.providers.google.views import GoogleOAuth2Adapter
 from allauth.socialaccount.providers.github.views import GitHubOAuth2Adapter
@@ -18,11 +41,343 @@ from dj_rest_auth.registration.views import SocialLoginView
 
 stripe.api_key = settings.STRIPE_SECRET_KEY
 
-import os
-import urllib.parse
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework.permissions import AllowAny
+class LoginView(APIView):
+    """
+    User login with password
+    If 2FA is enabled, generate and send OTP
+    """
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        serializer = LoginSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        username = serializer.validated_data['username']
+        password = serializer.validated_data['password']
+
+        user = authenticate(username=username, password=password)
+
+        if user is None:
+            return Response(
+                {'error': 'Invalid credentials'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+
+        # Check if user has 2FA enabled
+        try:
+            user_profile = user.profile
+        except UserProfile.DoesNotExist:
+            # Create profile if doesn't exist (for testing)
+            user_profile = UserProfile.objects.create(user=user)
+
+        if not user_profile.two_fa_enabled:
+            refresh = CustomTokenSerializer.get_token(user)
+            return Response({
+                'requires_2fa': False,
+                'message': 'Login successful. No 2FA required.',
+                'token': {
+                    'access': str(refresh.access_token),
+                    'refresh': str(refresh)
+                },
+                'user': {
+                    'id': user.id,
+                    'username': user.username,
+                    'email': user.email
+                }
+            })
+
+        # 2FA is enabled - check method
+        if user_profile.two_fa_method == 'totp':
+            # TOTP - just ask for code (no SMS/Email sent)
+            session_token = generate_session_token()
+            
+            # Store session temporarily
+            OTPVerification.objects.create(
+                user=user,
+                session_token=session_token,
+                purpose='login',
+                otp_code='000000'  # Dummy - not used for TOTP
+            )
+            
+            return Response({
+                'requires_2fa': True,
+                'two_fa_method': 'totp',
+                'session_token': session_token,
+                'message': 'Enter code from your authenticator app'
+            })
+        
+        else:
+            # SMS/Email OTP
+            otp_code = generate_otp()
+            session_token = generate_session_token()
+
+            # Delete any existing unverified OTP for this user
+            OTPVerification.objects.filter(
+                user=user,
+                verified=False,
+                purpose='login'
+            ).delete()
+
+            # Create new OTP record
+            otp_record = OTPVerification.objects.create(
+                user=user,
+                otp_code=otp_code,
+                session_token=session_token,
+                purpose='login',
+                phone_number=user_profile.phone_number if user_profile.two_fa_method == 'sms' else None,
+                email=user.email if user_profile.two_fa_method == 'email' else None
+            )
+
+            # Send OTP based on user's preference
+            if user_profile.two_fa_method == 'sms':
+                success, result = send_otp_via_sms(user_profile.phone_number, otp_code)
+                contact = user_profile.phone_number
+                masked_contact = self._mask_phone(contact)
+            else:  # email
+                success, result = send_otp_via_email(user.email, otp_code)
+                contact = user.email
+                masked_contact = self._mask_email(contact)
+
+            if not success:
+                # Failed to send OTP
+                otp_record.delete()
+                return Response(
+                    {'error': f'Failed to send OTP: {result}'},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+
+            # Success - OTP sent
+            response_data = {
+                'requires_2fa': True,
+                'session_token': session_token,
+                'message': f'Verification code sent to your {user_profile.two_fa_method}',
+                'two_fa_method': user_profile.two_fa_method,
+                'masked_contact': masked_contact
+            }
+
+            return Response(
+                LoginResponseSerializer(response_data).data,
+                status=status.HTTP_200_OK
+            )
+    
+    def _mask_phone(self, phone):
+        """Mask phone number: +923001234567 -> +92300****567"""
+        if len(phone) > 7:
+            return phone[:-7] + '****' + phone[-3:]
+        return phone
+    
+    def _mask_email(self, email):
+        """Mask email: user@example.com -> us**@example.com"""
+        if not email or '@' not in email:
+            return '***@***.com'
+        username, domain = email.split('@')
+        if len(username) > 2:
+            masked = username[:2] + '**' + (username[-1] if len(username) > 3 else '')
+            return f"{masked}@{domain}"
+        return email
+
+class OTPVerificationView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        serializer = OTPVerificationSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        session_token = serializer.validated_data['session_token']
+        otp_code = serializer.validated_data['otp_code']
+        try:
+            otp_record = OTPVerification.objects.get(
+                session_token=session_token,
+                verified=False,
+                purpose='login'
+            )
+        except OTPVerification.DoesNotExist:
+            return Response(
+                {'error':'Invalid session token, or session has expired.'}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        if otp_record.is_expired():
+            otp_record.delete()
+            return Response(
+                {'error': 'OTP has expired, please login.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        if otp_record.attempts>=5:
+            otp_record.delete()
+            return Response(
+                {'error': 'Too many attempts, please login.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        if otp_record.otp_code != otp_code:
+            otp_record.attempts += 1
+            otp_record.save()
+            attempts_left = 5 - otp_record.attempts
+            return Response(
+                {
+                    'error': 'Invalid OTP code. Please try again.',
+                    'attempts_left': attempts_left
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        user = otp_record.user
+        otp_record.verified = True
+        otp_record.save()
+        otp_record.delete()
+
+        refresh = CustomTokenSerializer.get_token(user)
+        return Response(
+            {
+                'success': True,
+                'message': 'Login successful.',
+                'token': {
+                    'access': str(refresh.access_token),
+                    'refresh': str(refresh)
+                    },
+                'user': {
+                    'id': user.id,
+                    'username': user.username,
+                    'email': user.email
+                }
+            },
+            status=status.HTTP_200_OK
+        )
+
+class TOTPSetupView(APIView):
+    """
+    Step 1: Generate TOTP secret and show to user
+    User must be logged in to enable TOTP
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+    
+    def post(self, request):
+        user = request.user
+        
+        # Check if TOTP already enabled
+        if user.profile.totp_enabled:
+            return Response(
+                {'error': 'TOTP is already enabled for your account'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Generate new secret
+        secret = generate_totp_secret()
+        
+        # Save to profile (unconfirmed)
+        user.profile.totp_secret = secret
+        user.profile.save()
+        
+        # Return secret to user
+        response_data = {
+            'secret_key': secret,
+            'message': 'TOTP setup initiated',
+            'instructions': (
+                '1. Open Google Authenticator app\n'
+                '2. Tap "+" or "Add account"\n'
+                '3. Choose "Enter a setup key"\n'
+                f'4. Account name: {user.username}\n'
+                f'5. Enter this key: {secret}\n'
+                '6. Choose "Time based"\n'
+                '7. Enter the 6-digit code shown in the app to verify'
+            )
+        }
+        
+        return Response(
+            TOTPSetupSerializer(response_data).data,
+            status=status.HTTP_200_OK
+        )
+
+class TOTPVerifySetupView(APIView):
+    """Verify TOTP code to complete setup"""
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+    
+    def post(self, request):
+        serializer = TOTPVerifySetupSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        
+        user = request.user
+        totp_code = serializer.validated_data['totp_code']
+        
+        # Check if user has secret
+        if not user.profile.totp_secret:
+            return Response(
+                {'error': 'No TOTP setup found. Please initiate setup first.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Verify the code
+        if not verify_totp_code(user.profile.totp_secret, totp_code):
+            return Response(
+                {'error': 'Invalid TOTP code. Please try again.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Code is valid - enable TOTP
+        user.profile.totp_enabled = True
+        user.profile.two_fa_enabled = True
+        user.profile.two_fa_method = 'totp'
+        user.profile.save()
+        
+        return Response({
+            'success': True,
+            'message': 'TOTP 2FA enabled successfully!',
+            'two_fa_method': 'totp'
+        }, status=status.HTTP_200_OK)
+
+class VerifyTOTPLoginView(APIView):
+    """
+    Verify TOTP code during login
+    """
+    permission_classes = []
+    authentication_classes = []
+    
+    def post(self, request):
+        serializer = TOTPVerificationLoginSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        
+        session_token = serializer.validated_data['session_token']
+        totp_code = serializer.validated_data['totp_code']
+        
+        # Find session
+        try:
+            otp_record = OTPVerification.objects.get(
+                session_token=session_token,
+                purpose='login'
+            )
+        except OTPVerification.DoesNotExist:
+            return Response(
+                {'error': 'Invalid session'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        user = otp_record.user
+        
+        # Verify TOTP code
+        if not verify_totp_code(user.profile.totp_secret, totp_code):
+            return Response(
+                {'error': 'Invalid TOTP code'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Valid! Complete login
+        otp_record.delete()
+        
+        refresh = CustomTokenSerializer.get_token(user)
+        
+        return Response({
+            'success': True,
+            'message': 'Login successful',
+            'token': {
+                'access': str(refresh.access_token),
+                'refresh': str(refresh)
+            },
+            'user': {
+                'id': user.id,
+                'username': user.username,
+                'email': user.email
+            }
+        }, status=status.HTTP_200_OK)
 
 class GoogleAuthURLView(APIView):
     permission_classes = [AllowAny] 
