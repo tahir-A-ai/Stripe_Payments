@@ -28,7 +28,6 @@ INSTALLED_APPS = [
     'rest_framework_simplejwt',
     'rest_framework.authtoken',
     'payments',
-
     'allauth',
     'allauth.account',
     'allauth.socialaccount',
@@ -37,6 +36,21 @@ INSTALLED_APPS = [
     'allauth.socialaccount.providers.github',
     'allauth.socialaccount.providers.linkedin_oauth2',
 ]
+
+
+# Twilio Configuration (for SMS)
+TWILIO_ACCOUNT_SID = os.environ.get('TWILIO_ACCOUNT_SID')
+TWILIO_AUTH_TOKEN = os.environ.get('TWILIO_AUTH_TOKEN')
+TWILIO_PHONE_NUMBER = os.environ.get('TWILIO_PHONE_NUMBER')
+
+# Email Configuration (for Email OTP)
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_HOST = 'smtp.gmail.com'
+EMAIL_PORT = 587
+EMAIL_USE_TLS = True
+EMAIL_HOST_USER = 'hab808443@gmail.com'
+EMAIL_HOST_PASSWORD = '1234567a-'
+DEFAULT_FROM_EMAIL = 'hab808443@gmail.com'
 
 
 REST_AUTH = {
@@ -87,6 +101,12 @@ REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'rest_framework_simplejwt.authentication.JWTAuthentication',
     ),
+    'DEFAULT_RENDERER_CLASSES': [
+        'rest_framework.renderers.JSONRenderer',
+    ],
+    'DEFAULT_PARSER_CLASSES': [
+        'rest_framework.parsers.JSONParser',
+    ],
 }
 
 SIMPLE_JWT = {
